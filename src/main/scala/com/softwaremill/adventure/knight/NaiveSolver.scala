@@ -4,6 +4,7 @@ import java.util.concurrent.Executors
 
 import monix.eval.Task
 import monix.execution.Scheduler
+import monix.execution.atomic.{AtomicInt, AtomicLong}
 
 import scala.collection.mutable
 import scala.util.Random
@@ -11,23 +12,25 @@ import scala.util.Random
 object NaiveSolver {
 
   type Position = (Int, Int)
-  type Board = Map[Position, Boolean]
 
   val random = new Random()
-  var counter = 0L
+  val counter = AtomicLong(0L)
+  val lastScore = AtomicInt(0)
   def main(args: Array[String]): Unit = {
-    solve(5, 5)
+    solve(8, 8)
   }
 
   def solve(n: Int, m: Int): Unit = {
 
     val startX = random.nextInt(n)
     val startY = random.nextInt(m)
-
-    val currentMove = 0 -> 0
-    val path = go(n, m, List.empty, currentMove -> List.empty)
+    //0,2
+    val currentMove = startX -> startY
+    println(s"Starting position: $currentMove")
     implicit val schedulerService = Scheduler.computation()
+    val path = go(n, m, List.empty, currentMove -> List.empty).runSyncUnsafe()
     println(s"$counter ${path.size} ${path}")
+    println(s"Starting position: $currentMove")
     printV(path, n, m)
   }
 
@@ -36,10 +39,19 @@ object NaiveSolver {
       m: Int,
       visited: List[(Position, List[Position])],
       currentPosition: (Position, List[Position])
-  ): List[Position] = {
-    counter += 1
+  ): Task[List[Position]] = {
+    val c = counter.incrementAndGet()
+    if (lastScore.get() < visited.size) {
+      lastScore.set(visited.size)
+      println(c)
+      println(visited.size)
+      printV(visited.map(_._1), n, m)
+    }
+    if (counter.get() % 100_000 == 0) {
+      println(counter.get())
+    }
     if (visited.size + 1 == m * n) {
-      (visited :+ currentPosition).map(_._1)
+      Task.pure((visited :+ currentPosition).map(_._1))
     } else {
       val nextMoves =
         getPossibleMoves(
@@ -51,9 +63,6 @@ object NaiveSolver {
         )
       nextMoves match {
         case nm if nm.nonEmpty =>
-//          Task.raceMany(nm.map { nextMove =>
-//
-//          })
           go(n, m, visited :+ currentPosition, nm.head -> List.empty)
         case Nil =>
           val nextPosition =
@@ -70,6 +79,27 @@ object NaiveSolver {
   }
 
   def getPossibleMoves(
+      visited: List[Position],
+      position: Position,
+      n: Int,
+      m: Int,
+      restricted: List[Position]
+  ): List[Position] = {
+    getPossibleMovesSimple(visited, position, n, m, restricted)
+      .map(move =>
+        move -> getPossibleMovesSimple(
+          visited :+ position,
+          move,
+          n,
+          m,
+          restricted
+        ).size
+      )
+      .sortBy(_._2)
+      .map(_._1)
+  }
+
+  def getPossibleMovesSimple(
       visited: List[Position],
       position: Position,
       n: Int,
@@ -99,6 +129,7 @@ object NaiveSolver {
   }
 
   def printV(visited: List[Position], n: Int, m: Int) = {
+    println("============================")
     (0 until n).foreach { ni =>
       (0 until m).foreach { mi =>
         if (visited.contains(ni -> mi)) {
