@@ -1,123 +1,83 @@
 package com.softwaremill.adventure.knight
 
-import java.util.concurrent.Executors
+import com.softwaremill.adventure.knight.NaiveSolver.{Modifiers, Position}
 
-import monix.eval.Task
-import monix.execution.Scheduler
-import monix.execution.atomic.{AtomicInt, AtomicLong}
+import scala.annotation.tailrec
 
-import scala.collection.mutable
-import scala.util.Random
+class NaiveSolver(n: Int, m: Int) {
+  private var counter = 0L
+  private var lastScore = 0L
 
-object NaiveSolver {
-
-  type Position = (Int, Int)
-
-  val random = new Random()
-  val counter = AtomicLong(0L)
-  val lastScore = AtomicInt(0)
-  def main(args: Array[String]): Unit = {
-    solve(8, 8)
+  def solve(startingPosition: Position): Unit = {
+    println(s"Starting position: $startingPosition")
+    val path = go(List.empty, VisitedCell(startingPosition))
+    println(s"$counter ${path.size} $path")
+    println(s"Starting position: $startingPosition")
+    printBoard(path, n, m)
   }
 
-  def solve(n: Int, m: Int): Unit = {
-
-    val startX = random.nextInt(n)
-    val startY = random.nextInt(m)
-    //0,2
-    val currentMove = startX -> startY
-    println(s"Starting position: $currentMove")
-    implicit val schedulerService = Scheduler.computation()
-    val path = go(n, m, List.empty, currentMove -> List.empty).runSyncUnsafe()
-    println(s"$counter ${path.size} ${path}")
-    println(s"Starting position: $currentMove")
-    printV(path, n, m)
-  }
-
+  @tailrec
   private def go(
-      n: Int,
-      m: Int,
-      visited: List[(Position, List[Position])],
-      currentPosition: (Position, List[Position])
-  ): Task[List[Position]] = {
-    val c = counter.incrementAndGet()
-    if (lastScore.get() < visited.size) {
-      lastScore.set(visited.size)
-      println(c)
-      println(visited.size)
-      printV(visited.map(_._1), n, m)
-    }
-    if (counter.get() % 100_000 == 0) {
-      println(counter.get())
-    }
+      visited: List[VisitedCell],
+      currentlyVisited: VisitedCell
+  ): List[Position] = {
+    counter += 1
+    printProgress(visited.map(_.position))
     if (visited.size + 1 == m * n) {
-      Task.pure((visited :+ currentPosition).map(_._1))
+      (visited :+ currentlyVisited).map(_.position)
     } else {
       val nextMoves =
         getPossibleMoves(
-          visited.map(_._1),
-          currentPosition._1,
-          n,
-          m,
-          currentPosition._2
+          visited.map(_.position),
+          currentlyVisited
         )
       nextMoves match {
-        case nm if nm.nonEmpty =>
-          go(n, m, visited :+ currentPosition, nm.head -> List.empty)
+        case head :: _ =>
+          go(visited :+ currentlyVisited, VisitedCell(head, List.empty))
         case Nil =>
-          val nextPosition =
-            visited.last.copy(_2 = visited.last._2 :+ currentPosition._1)
-          go(
-            n,
-            m,
-            visited.dropRight(1),
-            nextPosition
-          )
+          val previousPosition =
+            visited.last.copy(restricted =
+              visited.last.restricted :+ currentlyVisited.position
+            )
+          go(visited.dropRight(1), previousPosition)
       }
 
     }
   }
 
-  def getPossibleMoves(
+  private def getPossibleMoves(
       visited: List[Position],
-      position: Position,
-      n: Int,
-      m: Int,
-      restricted: List[Position]
+      currentlyVisited: VisitedCell
   ): List[Position] = {
-    getPossibleMovesSimple(visited, position, n, m, restricted)
-      .map(move =>
-        move -> getPossibleMovesSimple(
-          visited :+ position,
-          move,
-          n,
-          m,
-          restricted
-        ).size
-      )
+    val possibleMoves = getPossibleMovesSimple(
+      visited,
+      currentlyVisited.position,
+      currentlyVisited.restricted
+    )
+    val movesWithOutputs = possibleMoves.map(move =>
+      move -> getPossibleMovesSimple(
+        visited :+ currentlyVisited.position,
+        move,
+        currentlyVisited.restricted
+      ).size
+    )
+    sortMovesByOutputsAsc(movesWithOutputs)
+  }
+
+  private def sortMovesByOutputsAsc(
+      movesWithOutputs: List[((Int, Int), Int)]
+  ) = {
+    movesWithOutputs
       .sortBy(_._2)
       .map(_._1)
   }
 
-  def getPossibleMovesSimple(
+  private def getPossibleMovesSimple(
       visited: List[Position],
       position: Position,
-      n: Int,
-      m: Int,
       restricted: List[Position]
   ): List[Position] = {
-    val modifiers = List(
-      (-2, -1),
-      (-1, -2),
-      (-2, 1),
-      (-1, 2),
-      (1, -2),
-      (2, -1),
-      (1, 2),
-      (2, 1)
-    )
-
-    modifiers
+    Modifiers
       .map(m => (position._1 + m._1, position._2 + m._2))
       .filter {
         case (i, j) if i < 0 || j < 0   => false
@@ -128,7 +88,18 @@ object NaiveSolver {
       .filterNot(restricted.contains)
   }
 
-  def printV(visited: List[Position], n: Int, m: Int) = {
+  private def printProgress(
+      visited: List[Position]
+  ): Unit = {
+    if (lastScore < visited.size) {
+      lastScore = visited.size
+      println(s"counter: $counter")
+      println(s"visited: ${visited.size}")
+      printBoard(visited, n, m)
+    }
+  }
+
+  private def printBoard(visited: List[Position], n: Int, m: Int): Unit = {
     println("============================")
     (0 until n).foreach { ni =>
       (0 until m).foreach { mi =>
@@ -142,9 +113,29 @@ object NaiveSolver {
     }
   }
 }
-//    0  1  2  3  4
-// 0 |x|  |
-// 1
-// 2     x
-// 3
-// 4
+
+object NaiveSolver {
+
+  type Position = (Int, Int)
+
+  private val Modifiers = List(
+    (-2, -1),
+    (-1, -2),
+    (-2, 1),
+    (-1, 2),
+    (1, -2),
+    (2, -1),
+    (1, 2),
+    (2, 1)
+  )
+
+  def main(args: Array[String]): Unit = {
+    new NaiveSolver(8, 8).solve(2, 0)
+  }
+
+}
+
+case class VisitedCell(
+    position: Position,
+    restricted: List[Position] = List.empty
+)
